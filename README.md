@@ -117,7 +117,7 @@ Visualize the outliers in the real data. svd of the raw data and color the outli
 
 Density plot instead of a boxplot. Do a rug command on the plot to show the data points.
 
-# 29/06/2023
+# Discussion 29/06/2023
 
 1. Colored heatmaps to find outliers:
  Based the projections we graphed for each of 32 parcels
