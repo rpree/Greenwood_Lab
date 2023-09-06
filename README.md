@@ -77,16 +77,17 @@ Predict y using the trimmed dataset using SMLE and LASSO
 # Discussion April 21 2023
 
 For (j in 1:5) {
+
     in the 80% of the samples after removing the 20% of the samples in fold j
+
+
 We fit KDE twice, after sampling columns with either strategy1 or strategy 2. We need to find a nice software package for multivariate KDE.
 try the mvkde function below using ‘data’ = the 80% leaving out fold j (rows) and the columns selected by strategy 1 or strategy 2 AND ‘x’ = the 20% of the left out fold and the same number of columns as above.
 Define a tuning parameter which is going to be something like lambda. For example it might be (lambda = 1.5), or (lambda = 3).  Define a series of these lambdas. (1.5, 3, 5, 10). Do this using crossvalidation.
 Then find the outliers in the fold that was left out using the lambdas defined on the KDE results.
-This should lead to a list of points to be defined as outliers for each value of lambda.
-}
-After completing the loop, each sample should be associated with a series of “calls”, where each call is a decision as to whether this point is an outlier for a particular lambda. 
-=====================================
+This should lead to a list of points to be defined as outliers for each value of lambda.}
 
+After completing the loop, each sample should be associated with a series of “calls”, where each call is a decision as to whether this point is an outlier for a particular lambda. 
 
 Wu, Ximing (2019), "Robust Likelihood Cross Validation for Kernel Density Estimation," Journal of Business and Economic Statistics, 37(4): 761-770.
 
