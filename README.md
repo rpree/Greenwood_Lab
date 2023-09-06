@@ -1,14 +1,13 @@
-# Greenwood_lab
-Random Projections &amp; KDE
+# Random Projections; KDE
 Random Projections & KDE
 Tuesday, March 28, 2023
 11:22 AM
 
-Main Goals
+# Main Goals
 Identify outliers based on the cortical thickness data (our design matrix X) in the ABIDE dataset
 Perform supervised machine learning method (e.g. LASSO) with and without the outliers (to hopefully show the ability to obtain a better model fit when outliers are removed).
 
-Previous steps:
+# Previous steps:
  
 We divided the data into the previously-defined 32 parcels in the brain referring to different regions of the brain.
  
@@ -75,7 +74,7 @@ Remove the outliers
 Predict y using the trimmed dataset using SMLE and LASSO
 
 
-Discussion April 21 2023
+# Discussion April 21 2023
 
 For (j in 1:5) {
     in the 80% of the samples after removing the 20% of the samples in fold j
@@ -117,7 +116,7 @@ Visualize the outliers in the real data. svd of the raw data and color the outli
 
 Density plot instead of a boxplot. Do a rug command on the plot to show the data points.
 
-29/06/2023
+# 29/06/2023
 
 1. Colored heatmaps to find outliers:
  Based the projections we graphed for each of 32 parcels
@@ -144,7 +143,7 @@ Put the outliers in the data that are not easy to find. How to simulate more sub
 4. Brainstorm about what the KDE is actually finding.
 
 
-Next steps:
+# Next steps:
 
 Make a pipeline of the analysis you’ve done so far. The random projections, parcellations and no parcellations analysis.
 Make a function of all the analysis:
