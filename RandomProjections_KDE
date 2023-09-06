@@ -1,0 +1,816 @@
+```{r}
+# Reading the data 
+data <- read.csv("~/projects/Data/abide_fs60_vout_fwhm0_lh_SubjectIDFormatted_N1050_nonzero_withSEX.csv")
+```
+
+```{r}
+# Data obtained from Nikhil's Python code for voxel information
+ver <- read.csv('~/projects/Data/voxels.csv')
+column2 <- read.csv('~/projects/Data/column2.csv')
+uniqueRegions = as.vector(unique(ver))
+
+df <- subset(data, select = -c(1,2) ) # removing the response variable y and the first two columns which are subject ID and index no.
+
+X <- subset(df, select = -c(149956,149957,149958)) #removing last three variables which sex, DX_Group and ?
+```
+
+```{r}
+# Loading packages
+library(caret)
+library(dplyr)
+library(RandPro)
+library(Rdimtools)
+library(stringr)
+library(tidyverse)
+library(kdensity)
+library(rlcv)
+library(SMLE)
+library(glmnet)
+```
+
+```{r}
+
+#Select SUB_IDs whose DX_GROUP is 0 (This is selecting Subject IDs of all the controls)
+sub.id <- subset(data, select = c(2,149960))
+sub.id.controls <- sub.id[sub.id$DX_GROUP == 0,]
+# Selecting SUB_IDs of all cases
+sub.id.cases <- sub.id[sub.id$DX_GROUP == 1,]
+
+#Dividing controls randomly into training (2/3) and test(1/3)
+set.seed(1234)
+train.samples.controls <- createDataPartition(sub.id.controls$SUB_ID, p = .667, list = FALSE,times = 1)
+train.controls  <- sub.id.controls[train.samples.controls, ]
+test.controls <- sub.id.controls[-train.samples.controls, ]
+
+#Dividing cases randomly into training(2/3) and test(1/3)
+train.samples.cases <- createDataPartition(sub.id.cases$SUB_ID, p = .667, list = FALSE,times = 1)
+train.cases  <- sub.id.cases[train.samples.cases, ]
+test.cases <- sub.id.cases[-train.samples.cases, ]
+
+#Training samples cases and controls
+train.samples <- rbind(train.controls,train.cases)
+test.samples <- rbind(test.controls,test.cases)
+
+```
+
+```{r}
+# Stratified selection of (2/3) of training set containing both controls and cases and
+# stratified selection of (1/3) of test set containing both controls and cases
+#Select SUB_IDs whose DX_GROUP is 0 (This is selecting Subject IDs of all the controls)
+data.controls <- data[data$DX_GROUP == 0,]
+# Selecting SUB_IDs of all cases
+data.cases <- data[data$DX_GROUP == 1,]
+
+
+set.seed(5678)
+#Dividing controls randomly into training (2/3) and test(1/3)
+data.train.samples.controls <- createDataPartition(data.controls$SUB_ID, p = .667, list = FALSE,times = 1)
+data.train.controls  <- data.controls[data.train.samples.controls, ]
+data.test.controls <- data.controls[-data.train.samples.controls, ]
+
+#Dividing cases randomly into training(2/3) and test(1/3)
+data.train.samples.cases <- createDataPartition(data.cases$SUB_ID, p = .667, list = FALSE,times = 1)
+data.train.cases  <- data.cases[data.train.samples.cases, ]
+data.test.cases <- data.cases[-data.train.samples.cases, ]
+
+#Only Training sample cases and controls
+data.train.samples <- rbind(data.train.controls,data.train.cases)
+#cv.data.train <- trainControl(method = "cv", number = 5)
+#Only Test sample cases and controls
+data.test.samples <- rbind(data.test.controls,data.test.cases)
+```
+
+
+```{r}
+###### Here on, we use only the training data set to do any analysis ########
+
+df.train <- subset(data.train.samples, select = -c(1,2) ) # removing the response variable y and the first two columns which are subject ID and index no.
+
+X.train <- subset(df.train, select = -c(149956,149957,149958)) #removing last three variables which sex, DX_Group and ?
+
+set.seed(123)
+
+#rev(X)[c(101:1000)]
+
+parcels.train <- unique(ver)
+column_names.train <- colnames(X.train)
+
+subMatrices.train = list()
+idcs.train = list()
+
+#idcs = list()
+for (i in 1:length(parcels.train[[1]]))
+{
+  idcs.train = which(ver==parcels.train[[1]][i])
+  indx.train <- rep(NA, length(idcs.train))
+  for (j in 1:length(idcs.train))
+    {
+    temp.train = which(column_names.train == paste0('X',idcs.train[j]))
+    if(length(temp.train)>0)
+    {
+      indx.train[j] = temp.train
+    }
+  }
+  indx.train = indx.train[!is.na(indx.train)]
+  subMatrices.train[[i]] = X.train[,indx.train] 
+}
+
+```
+
+
+```{r}
+red_matrix.train = list()
+v1 = list()
+
+#v1 <- matrix(rnorm(8593*50), ncol=50)
+
+for (i in 1:length(subMatrices.train)){
+  
+  v1[[i]] <- matrix(rnorm(ncol(subMatrices.train[[i]])*50), ncol=50)
+  col_norms = sqrt(colSums(v1[[1]]^2))
+  v1[[i]] = v1[[i]]/col_norms
+  red_matrix.train[[i]] <- as.data.frame(as.matrix(subMatrices.train[[i]]) %*% v1[[i]])
+
+}
+
+```
+
+```{r}
+# Unlisting the reduced matrix and creating a data frame with 1600 variables. This data frame contains 50 columns from each of 32 parcels joined together as columns.
+## THIS IS THE 704X1600 data frame. 50 columns selected randomly from each of 32 parcels. Hence 50*32 = 1600 variables.
+red_mat_tra <- data.frame(cbind(red_matrix.train[[1]],red_matrix.train[[2]]))
+for (i in 3:length(red_matrix.train))
+{
+  red_mat_tra <- cbind(red_mat_tra,red_matrix.train[[i]])
+}
+
+#red_mat_tra[c('X138790.1')]
+red_mat_tra <- data.frame(red_mat_tra)
+
+```
+
+
+```{r}
+## Creating a whole data random projection of 704X160 variables from the whole dataset with 704X149960 variables( NOT USING PARCELS).
+df.rand.proj <- subset(data.train.samples, select = -c(1,2,149956,149957,149958) ) # removing the response variable y and the first two columns which are subject ID and index no. and #removing last three variables which are sex, DX_Group and ?
+df.rand.proj <- as.matrix(df.rand.proj)
+
+proj.mat.whole.data.samp = matrix(rnorm(ncol(df.rand.proj)*160), ncol=160)
+whole.data.rand.proj <- as.matrix(df.rand.proj %*% proj.mat.whole.data.samp)
+whole.data.rand.proj <- as.data.frame(whole.data.rand.proj)
+ #whole.data.samp <- data.train.samples[,sample(ncol(data.train.samples),size = 1600,replace = FALSE)]
+ #whole.data.rand.proj <- whole.data.samp*proj.mat.whole.data.samp
+```
+
+
+```{r}
+# KDE function
+library(matrixcalc)
+## radially symmetric kernel (Gaussian kernel)
+RadSym <- function(u)
+ #exp(-rowSums(u^2)/2) / (2*pi)^(ncol(u)/2)
+exp(-rowSums(u^2)/2) / ((2*pi)^(ncol(u)))^(1/2)
+## multivariate extension of Scott's bandwidth rule
+Scott <- function(data)
+ t(chol(cov(data))) * nrow(data) ^ (-1/(ncol(data)+4))
+## compute KDE at x given data
+mvkde <- function(x, data, bandwidth=Scott, kernel=RadSym) {
+# bandwidth may be a function or matrix
+ if(is.function(bandwidth))
+   bandwidth <- bandwidth(data)
+ u <- t(solve(bandwidth, t(data) - x))
+ A = det(bandwidth)
+ mean(kernel(u))
+}
+
+## compute KDE at (matrix) x given data
+smvkde <- function(x, ...)
+  apply(x, 1, mvkde, ...)
+
+```
+
+```{r}
+#crossvalidation
+
+set.seed(123)
+kfolds <- 5
+cv_err = rep(0, kfolds)
+fold = sample(1:kfolds, size=nrow(red_mat_tra), replace=T)
+
+in_data.parcel <- list()
+out_data.parcel <- list()
+five_parcel <- list()
+five_parcel_in<-list()
+five_parcel_out <-list()
+#out_data.onesixty.parcel <- list()
+out_data.onesixty.whole <- list()
+in_data.subid <- list()
+out_data.subid <- list()
+
+
+kde1.train = list()
+coef.kde1.train = list()
+log_likelihood.kde1.train = list()
+
+in_data.whole <- list()
+out_data.whole <- list()
+five_whole <- list()
+
+kde2.train = list()
+coef.kde2.train = list()
+log_likelihood.kde2.train = list()
+
+
+for(j in 1:kfolds){
+  # Dividing the parcel data into k folds
+  in_data.parcel[[j]] <- filter(red_mat_tra, fold!=j)
+  out_data.parcel[[j]] <- filter(red_mat_tra, fold==j)
+  in_data.subid[[j]] <- data.train.samples$SUB_ID[which(fold!=j)]
+  out_data.subid[[j]] <- data.train.samples$SUB_ID[which(fold==j)]
+  
+  # Dividing the whole data into k folds
+   #in_data.whole[[j]] <- filter(whole.data.rand.proj, fold!=j)
+   #out_data.whole[[j]] <- filter(whole.data.rand.proj, fold==j)
+  
+   # Selecting 5 variables from each parcel at random for each fold. This is 5X32=160 variables for each fold
+  #five_parcel[[j]] <- in_data.parcel[[j]][,sample(ncol(in_data.parcel[[j]][,1:50]),size = 5,replace = FALSE)]
+  #out_data.onesixty.parcel[[j]] <- out_data.parcel[[j]][,sample(ncol(out_data.parcel[[j]][,1:50]),size = 5,replace=FALSE)]
+  nTotalColumns = ncol(in_data.parcel[[j]]) 
+  N = 50
+   counter = 1
+   m = 5 # number of columns per parcel
+  five_parcel_in[[j]] <- data.frame(matrix(ncol = m*nTotalColumns/N, nrow = nrow(in_data.parcel[[j]]) ))
+  five_parcel_out[[j]] <- data.frame(matrix(ncol = m*nTotalColumns/N, nrow = nrow(out_data.parcel[[j]]) ))
+  for (i in seq(from = 1, to = nTotalColumns, by = N)) 
+  {
+    randColumns = sample(N,size=m, replace=FALSE)+i
+    five_parcel_in[[j]][,((counter-1)*m+1):(counter*m)] <- in_data.parcel[[j]][,randColumns]
+    five_parcel_out[[j]][,((counter-1)*m+1):(counter*m)] <- out_data.parcel[[j]][,randColumns]
+    counter = counter+1
+}
+
+  #Fitting KDE for each fold with 160 variables from parcels.
+  for (k in 1:length(five_parcel_in)) {
+    
+ 
+    kde1.train[[k]] = smvkde(x=five_parcel_out[[k]],data=five_parcel_in[[k]])
+  
+  }
+
+#Fitting KDE for each fold with 160 variables from whole dataset.
+  #for (l in 1:length(five_whole)) {
+    
+  #kde2.train[[l]] = smvkde(x=out_data.onesixty.whole[[l]],data=five_whole[[l]])
+
+ # }
+ 
+ summary <- list()
+ InterQuartileRange <- list()
+ OutlierPoint <- list()
+ 
+ outliers = list()
+ outlier_cat = list()
+ for (p in 1:length(kde1.train)) {
+   #InterQuartileRange[[p]] <- IQR(kde1.train[[p]])
+   dataTemp = log10(kde1.train[[p]])
+   q1 = quantile(dataTemp,0.25)
+   q3 = quantile(dataTemp,0.75)
+   InterQuartileRange = q3-q1
+  # lambda <- c(1.5,3,5,10)
+ #  lambda <- c(1.5,10,100,1000,100000)
+   #lambda <- 10^seq(-19,-18.5,0.1)
+   lambda <- seq(1,3,0.1)
+   outliersTemp = list()
+   for (q in 1:length(lambda)) {
+     #OutlierPoint[[p]][[q]] <- lambda[q]*(InterQuartileRange[[p]])
+     #ii <- which(kde1.train[[p]]>(lambda[q]*InterQuartileRange[[p]]))
+     
+    # ii <- which(kde1.train[[p]]>(q3 + lambda[q]*InterQuartileRange))
+     jj <- which(dataTemp<(q1 - lambda[q]*InterQuartileRange))
+     outlierIdcs = cbind(jj)
+     outliersTemp[[q]] <- out_data.subid[[p]][jj]
+    }
+   outliers[[p]] <- outliersTemp
+   
+   iLambda = 21
+   outlier_cat = union(outlier_cat,outliersTemp[[iLambda]])
+   
+   kde1Temp = log10(kde1.train[[p]])
+   q1 = quantile(kde1Temp,0.25)
+   q3 = quantile(kde1Temp,0.75)
+   InterQuartileRange = q3-q1
+   #threshHigh = q3 + lambda[q]*InterQuartileRange
+   threshLow = q1 - lambda[iLambda]*InterQuartileRange
+   #ii <- which(kde1Temp>(threshHigh))
+   jj <- which(kde1Temp<(threshLow))
+   #plot(kde1Temp*0,(kde1Temp), col="black", log = 'y')
+   plot(kde1Temp*0,(kde1Temp), col="black")
+   lines(c(-1,1),c((threshLow),(threshLow)),col="red")
+   #lines(c(-1,1),c((threshHigh),(threshHigh)),col="red")
+  # points(kde1Temp[ii]*0,(kde1Temp[ii]), col="red")
+   points(kde1Temp[jj]*0,(kde1Temp[jj]), col="red")
+ }
+ length(outlier_cat)
+}
+ final_outliers <- data.frame(as.matrix(outlier_cat))
+ #outlier_cat <- list()
+ 
+#kde1.train_csv <- write.csv(kde1.train[[1]],'/home/greenwood/preethi.ravikumar/projects/Data/kde1.train_firstfold.csv')
+ 
+ d <- density(kde1Temp)
+ plot(d)
+```
+
+```{r}
+outlierIdcs <- match(outlier_cat,data.train.samples$SUB_ID)
+notOutlierIdcs = setdiff(seq(1,nrow(data.train.samples),1),outlierIdcs)
+data_without_outliers <- data.train.samples[notOutlierIdcs,]
+
+X.train.smle <- subset(data_without_outliers, select = -c(1,2,149956,149957,149958) ) # removing the response variable y and the first two columns which are subject ID and index no. and #removing last three variables which sex, DX_Group and ?
+Y.train.smle <- data_without_outliers$AGE_AT_SCAN
+```
+
+```{r}
+#------------------------------------------------------------------
+#Outliers in the whole dataset with 160 variables picked at random
+#------------------------------------------------------------------
+set.seed(123)
+kfolds <- 5
+cv_err = rep(0, kfolds)
+fold = sample(1:kfolds, size=nrow(whole.data.rand.proj), replace=T)
+
+
+#out_data.onesixty.parcel <- list()
+out_data.onesixty.whole <- list()
+#in_data.subid <- list()
+#out_data.subid <- list()
+
+
+in_data.whole <- list()
+out_data.whole <- list()
+five_whole <- list()
+
+kde2.train = list()
+
+
+
+for(j in 1:kfolds){
+   # Dividing the whole data into k folds
+   in_data.whole[[j]] <- filter(whole.data.rand.proj, fold!=j)
+   out_data.whole[[j]] <- filter(whole.data.rand.proj, fold==j)
+  #in_data.subid[[j]] <- data.train.samples$SUB_ID[which(fold!=j)]
+  #out_data.subid[[j]] <- data.train.samples$SUB_ID[which(fold==j)]
+  
+
+ # Selecting 160 variables from whole data random projections at random for each fold. This is 160 variables for each fold
+  #five_whole[[j]] <- in_data.whole[[j]][,sample(ncol(in_data.whole[[j]]),size = 160,replace=FALSE)]
+  #out_data.onesixty.whole[[j]] <- out_data.whole[[j]][,sample(ncol(out_data.whole[[j]]),size = 160,replace=FALSE)]
+
+ #Fitting KDE for each fold with 160 variables from whole dataset.
+  for (l in 1:length(in_data.whole)) {
+    
+  kde2.train[[l]] = smvkde(x=out_data.whole[[l]],data=in_data.whole[[l]])
+
+ }
+ 
+ summary2 <- list()
+ InterQuartileRange2 <- list()
+ OutlierPoint2 <- list()
+ 
+ outliers2 = list()
+ outlier_cat2 = list()
+ for (p in 1:length(kde2.train)) {
+   #InterQuartileRange[[p]] <- IQR(kde1.train[[p]])
+   dataTemp2 = log10(kde2.train[[p]])
+   q1_2 = quantile(dataTemp2,0.25)
+   q3_2 = quantile(dataTemp2,0.75)
+   InterQuartileRange2 = q3_2-q1_2
+  # lambda <- c(1.5,3,5,10)
+ #  lambda <- c(1.5,10,100,1000,100000)
+   #lambda <- 10^seq(-19,-18.5,0.1)
+   lambda2 <- seq(1,3,0.1)
+   outliersTemp2 = list()
+   for (q in 1:length(lambda2)) {
+     #OutlierPoint[[p]][[q]] <- lambda[q]*(InterQuartileRange[[p]])
+     #ii <- which(kde1.train[[p]]>(lambda[q]*InterQuartileRange[[p]]))
+     
+    # ii <- which(kde1.train[[p]]>(q3 + lambda[q]*InterQuartileRange))
+     jj_2 <- which(dataTemp2<(q1_2 - lambda[q]*InterQuartileRange2))
+     outlierIdcs2 = cbind(jj_2)
+     outliersTemp2[[q]] <- out_data.subid[[p]][jj_2]
+    }
+   outliers2[[p]] <- outliersTemp2
+   
+   iLambda = 21
+   outlier_cat2 = union(outlier_cat2,outliersTemp2[[iLambda]])
+   
+   kde2Temp = log10(kde2.train[[p]])
+   q1_2 = quantile(kde2Temp,0.25)
+   q3_2 = quantile(kde2Temp,0.75)
+   InterQuartileRange2 = q3_2-q1_2
+   #threshHigh = q3 + lambda[q]*InterQuartileRange
+   threshLow2 = q1_2 - lambda2[iLambda]*InterQuartileRange2
+   #ii <- which(kde1Temp>(threshHigh))
+   jj_2 <- which(kde2Temp<(threshLow))
+   #plot(kde1Temp*0,(kde1Temp), col="black", log = 'y')
+   plot(kde2Temp*0,(kde2Temp), col="black")
+   lines(c(-1,1),c((threshLow2),(threshLow2)),col="red")
+   #lines(c(-1,1),c((threshHigh),(threshHigh)),col="red")
+  # points(kde1Temp[ii]*0,(kde1Temp[ii]), col="red")
+   points(kde2Temp[jj]*0,(kde2Temp[jj]), col="red")
+ }
+ length(outlier_cat2)
+}
+ 
+```
+
+```{r}
+outlierIdcs2 <- match(outlier_cat2,data.train.samples$SUB_ID)
+notOutlierIdcs2 = setdiff(seq(1,nrow(data.train.samples),1),outlierIdcs2)
+data_without_outliers2 <- data.train.samples[notOutlierIdcs2,]
+
+X.train.whole <- subset(data_without_outliers2, select = -c(1,2,149956,149957,149958) ) # removing the response variable y and the first two columns which are subject ID and index no.and #removing last three variables which sex, DX_Group and ?
+Y.train.whole <- data_without_outliers2$AGE_AT_SCAN
+```
+
+```{r}
+#lambda <- seq(1,2,0.1)
+#for (q in 1:length(lambda)) {
+  #   kde1Temp = log10(kde1.train[[p]])
+   #q1 = quantile(kde1Temp,0.25)
+   #q3 = quantile(kde1Temp,0.75)
+   #InterQuartileRange = q3-q1
+   #threshHigh = q3 + lambda[q]*InterQuartileRange
+   #threshLow = q1 - lambda[q]*InterQuartileRange
+   #ii <- which(kde1Temp>(threshHigh))
+   #jj <- which(kde1Temp<(threshLow))
+   #plot(kde1Temp*0,(kde1Temp), col="black", log = 'y')
+   #plot(kde1Temp*0,(kde1Temp), col="black")
+   #lines(c(-1,1),c((threshLow),(threshLow)),col="red")
+   #lines(c(-1,1),c((threshHigh),(threshHigh)),col="red")
+  # points(kde1Temp[ii]*0,(kde1Temp[ii]), col="red")
+   #points(kde1Temp[jj]*0,(kde1Temp[jj]), col="red")
+   #title(log10(lambda[q]))
+#}
+```
+
+```{r}
+#p = 1
+#q = 1
+#kde1Temp = (kde1.train[[p]])
+#q1 = quantile(kde1Temp,0.25)
+#q3 = quantile(kde1Temp,0.75)
+#InterQuartileRange = q3-q1
+#threshHigh = q3 + lambda[q]*InterQuartileRange
+#threshLow = q1 - lambda[q]*InterQuartileRange
+#ii <- which(kde1Temp>(threshHigh))
+#jj <- which(kde1Temp<(threshLow))
+#plot(kde1Temp*0,(kde1Temp), col="black", log = 'y')
+#lines(c(-1,1),c((threshLow),(threshLow)),col="red")
+#lines(c(-1,1),c((threshHigh),(threshHigh)),col="red")
+#points(kde1Temp[ii]*0,(kde1Temp[ii]), col="red")
+#points(kde1Temp[jj]*0,(kde1Temp[jj]), col="red")
+```
+
+
+```{r}
+#---------------------------------------------------
+#SMLE where the outliers were taken out
+#---------------------------------------------------
+
+set.seed(123)
+#train.samples.sub <- createDataPartition(data_sub$AGE_AT_SCAN, p = .8, list = FALSE,times = 1)
+#train.sub  <- data_sub[train.samples.sub, ]
+#test.sub <- data_sub[-train.samples.sub, ]
+
+fit <- SMLE(X = X.train.smle, Y = Y.train.smle,k = 160, family = "gaussian", categorical = FALSE, group = TRUE)
+
+summary(fit)
+
+fit_s <- smle_select(fit, criterion = 'ebic')
+
+summary(fit_s)
+
+predictions <- predict(fit_s,newdata = data.test.samples)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+```{r}
+#---------------------------------------------------------
+# SMLE where outliers were left intact
+#---------------------------------------------------------
+X.train <- subset(data.train.samples, select = -c(1,2,149956,149957,149958) ) # removing the response variable y and the first two columns which are subject ID and index no. and #removing last three variables which sex, DX_Group and ?
+Y.train <- data.train.samples$AGE_AT_SCAN
+
+fit_full <- SMLE(Y = Y.train, X = X.train, k = 160, family = "gaussian", categorical = FALSE, group = TRUE)
+
+summary(fit_full)
+
+fit_full_s <- smle_select(fit_full, criterion = 'ebic')
+
+summary(fit_full_s)
+
+predictions_full <- predict(fit_full_s,newdata = data.test.samples)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_full, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_full, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+```{r} 
+#------------------------------------------------------------------
+# LASSO where the outliers were taken out
+#------------------------------------------------------------------
+library(glmnet)
+x <- as.matrix(X.train.smle)
+
+la_cv <- cv.glmnet(x=x, y=Y.train.smle, family='gaussian',
+            alpha=1, intercept = F, nfolds=5)
+plot(la_cv)
+paste(la_cv$lambda.min, la_cv$lambda.1se)
+
+
+# lasso
+la <- glmnet(X.train.smle, Y.train.smle, lambda =la_cv$lambda.1se,
+             family='gaussian', alpha=1,
+             intercept = F) 
+
+# Results
+df.comp <- data.frame(Lasso = la$beta[,1])
+
+
+df.test <- subset(data.test.samples, select = -c(1,2) ) # removing the response variable y and the first two columns which are subject ID and index no.
+
+X.test <- subset(df.test, select = -c(149956,149957,149958)) #removing last three variables which sex, DX_Group and ?
+
+x.test <- as.matrix(X.test)
+
+predictions_lasso <- predict(la,newx = x.test)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_lasso, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_lasso, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+
+```{r}
+#--------------------------------------------------------------------
+# LASSO where outliers were left intact
+#--------------------------------------------------------------------
+x.train <- as.matrix(X.train)
+la_cv_full <- cv.glmnet(x=x.train, y=Y.train, family='gaussian',
+            alpha=1, intercept = F, nfolds=5)
+plot(la_cv_full)
+paste(la_cv_full$lambda.min, la_cv_full$lambda.1se)
+
+
+la_full <- glmnet(X.train, Y.train, lambda = la_cv_full$lambda.1se,
+             family='gaussian', alpha=1,
+             intercept = F) 
+# group lasso
+#gr <- gglasso(x, Y.train.smle, lambda = 0.2,
+            # group = v.group, loss='ls',
+            # intercept = F)
+
+# Results
+df.comp_full <- data.frame(Lasso = la_full$beta[,1])
+
+
+
+predictions_lasso_full <- predict(la_full,newx = x.test)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_lasso_full, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_lasso_full, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+```{r}
+#--------------------------------------------------------------------------
+# lasso where the outliers were taken out (with a given lambda NOT chosen by crossvalidation)
+#--------------------------------------------------------------------------
+la_giv <- glmnet(X.train.smle, Y.train.smle, lambda =0.3,
+             family='gaussian', alpha=1,
+             intercept = F) 
+
+# Results
+df.comp <- data.frame(Lasso = la_giv$beta[,1])
+
+
+X.test <- subset(data.test.samples, select = -c(1,2,149956,149957,149958) ) # removing the response variable y and the first two columns which are subject ID and index no. and #removing last three variables which sex, DX_Group and ?
+
+X.test <- as.matrix(X.test)
+
+predictions_lasso_giv <- predict(la_giv,newx = X.test)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_lasso_giv, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_lasso_giv, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+```{r}
+#--------------------------------------------------------------------------
+# lasso where outliers were left intact (with a given lambda NOT chosen by crossvalidation)
+#--------------------------------------------------------------------------
+X.train <- as.matrix(X.train)
+
+
+la_full_giv <- glmnet(X.train, Y.train, lambda = 0.3,
+             family='gaussian', alpha=1,
+             intercept = F) 
+# group lasso
+#gr <- gglasso(x, Y.train.smle, lambda = 0.2,
+            # group = v.group, loss='ls',
+            # intercept = F)
+
+# Results
+df.comp_full <- data.frame(Lasso = la_full_giv$beta[,1])
+
+
+
+predictions_lasso_full_giv <- predict(la_full_giv,newx = X.test)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_lasso_full_giv, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_lasso_full_giv, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+
+```{r}
+#------------------------------------------------------------------------------------------------------------
+# lasso where outliers were taken out ( this is done for the whole data, 160 varibles picked at random NOT using random projections (with a given lambda NOT chosen by crossvalidation)
+#-------------------------------------------------------------------------------------------------------------
+la_giv_whole <- glmnet(X.train.whole, Y.train.whole, lambda =0.3,
+             family='gaussian', alpha=1,
+             intercept = F) 
+
+# Results
+df.comp_whole <- data.frame(Lasso = la_giv_whole$beta[,1])
+
+
+X.test <- subset(data.test.samples, select = -c(1,2,149956,149957,149958) ) # removing the response variable y and the first two columns which are subject ID and index no. and #removing last three variables which sex, DX_Group and ?
+
+X.test <- as.matrix(X.test)
+
+predictions_lasso_giv_whole <- predict(la_giv_whole,newx = X.test)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_lasso_giv_whole, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_lasso_giv_whole, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+
+```{r}
+#--------------------------------------------------------------------------
+# lasso where outliers were left intact (with a given lambda NOT chosen by crossvalidation)
+#---------------------------------------------------------------------------
+X.train <- as.matrix(X.train)
+
+
+la_full_giv <- glmnet(X.train, Y.train, lambda = 0.3,
+             family='gaussian', alpha=1,
+             intercept = F) 
+# group lasso
+#gr <- gglasso(x, Y.train.smle, lambda = 0.2,
+            # group = v.group, loss='ls',
+            # intercept = F)
+
+# Results
+df.comp_full <- data.frame(Lasso = la_full_giv$beta[,1])
+
+
+
+predictions_lasso_full_giv <- predict(la_full_giv,newx = x.test)
+# Model performance metrics
+data.frame(
+  RMSE = RMSE(predictions_lasso_full_giv, data.test.samples$AGE_AT_SCAN),
+  Rsquare = R2(predictions_lasso_full_giv, data.test.samples$AGE_AT_SCAN)
+)
+```
+
+```{r}
+#Visualizations
+
+parcellations <- as.vector(t(kronecker(matrix(1,1,5),1:32)))
+```
+
+```{r}
+```
+
+
+```{r}
+five_parcel_pca <- rbind(five_parcel_in[[1]],five_parcel_out[[1]])
+pca1 <- prcomp(t(five_parcel_pca),scale=TRUE)
+names(pca1)
+pc_plot <- plot(pca1$x[, 1], pca1$x[, 2], col = parcellations , main = "PCA", xlab = "PC1", ylab = "PC2", pch=16, cex=1.8)
+```
+
+
+```{r}
+parcellations2 <- as.vector(t(kronecker(matrix(1,1,50),1:32)))
+pca3 <- prcomp(t(red_mat_tra),scale=TRUE)
+#parc_samples = sample.int(32, 4)
+parc_samples = c(10,29,30,23)
+idcs_pca = matrix(ncol=4,nrow=50)
+for (i in 1:50){
+  idcs_pca[i,] = (parc_samples-1)*50+i
+}
+names(pca1)
+par(mfrow=c(2,2))
+for (j in 1:4){
+  plot(pca3$x[, 1], pca3$x[, 2], col = 'black' , xlab = "PC1", ylab = "PC2", pch=16, cex=1)
+  points(pca3$x[idcs_pca[,j], 1], pca3$x[idcs_pca[,j], 2], col = parcellations2[idcs_pca[,j]], pch=16, cex=1.2)
+}
+
+```
+
+```{r}
+#--------------------------------------------------------------------
+# Visualizing all 32 parcels and their first PCs
+#--------------------------------------------------------------------
+parc_samples = 1:32
+idcs_pca = matrix(ncol=32,nrow=50)
+for (i in 1:50){
+  idcs_pca[i,] = (parc_samples-1)*50+i
+}
+names(pca1)
+par(mfrow=c(4,8))
+for (j in 1:32){
+  plot(pca3$x[, 1], pca3$x[, 2], col = 'black' , xlab = "PC1", ylab = "PC2", pch=16, cex=1)
+  points(pca3$x[idcs_pca[,j], 1], pca3$x[idcs_pca[,j], 2], col = parcellations2[idcs_pca[,j]], pch=16, cex=1.2)
+}
+```
+
+```{r}
+
+#--------------------------------------------------------------------
+# The two chosen outlier according to random projections shown in PCA space
+#--------------------------------------------------------------------
+
+#pca2 <- prcomp(X.train)
+names(pca2)
+
+
+plot(pca2$x[, 1], pca2$x[, 2], col = 'black' , main = "PCA", xlab = "PC1", ylab = "PC2", pch=16, cex=0.4)
+points(pca2$x[outlierIdcs,1], pca2$x[outlierIdcs,2], col = 'red', pch=16, cex =1.8)
+```
+```{r}
+#--------------------------------------------------------------------
+# The two chosen outlier according to random projections shown in PCA space with AGE as a predictor
+#--------------------------------------------------------------------
+age = data.train.samples$AGE_AT_SCAN
+
+plot(pca2$x[, 1], age, col = 'black' , main = "PCA", xlab = "PC1", ylab = "Age (years)", pch=16, cex=0.4)
+points(pca2$x[outlierIdcs,1], age[outlierIdcs], col = 'red', pch=16, cex =1.8)
+```
+
+
+```{r}
+# file_red_mat <- write.csv(red_mat_tra,'/home/greenwood/preethi.ravikumar/projects/Data/file_red_mat.csv')
+```
+
+```{r}
+# PCA on Parcel 10
+#parcel10 <- red_mat_tra[,501:550]
+#parcel9 <- red_mat_tra[,451:500]
+#pca_parcel10 <- prcomp(parcel10)
+
+names(pca_parcel10)
+
+
+plot(pca_parcel10$x[, 12], pca_parcel10$x[, 13], col = 'black' , main = "PCA Parcel 10", xlab = "PC3", ylab = "PC4", pch=16, cex=0.4)
+points(pca_parcel10$x[outlierIdcs,1], pca_parcel10$x[outlierIdcs,2], col = 'red', pch=16, cex =1.8)
+```
+
+
+```{r}
+red_mat_tra_heatmap <- as.matrix(red_mat_tra)
+heatmap(red_mat_tra_heatmap,Rowv = NA,
+        Colv = NA)
+```
+
+```{r}
+parcel_ten <- five_parcel_out[[1]][,46:50]
+sorted_idcs <- order(kde1.train[[1]])
+sorted_parcel_ten <- parcel_ten[sorted_idcs,]
+parcel10_heatmap <- as.matrix(sorted_parcel_ten)
+heatmap(parcel10_heatmap,Rowv = NA,
+        Colv = NA, scale = 'none')
+#image(parcel10_heatmap)
+```
+
+
+```{r}
+parcel9_heatmap <- as.matrix(parcel9)
+heatmap(parcel9_heatmap,Rowv = NA,
+        Colv = NA)
+```
