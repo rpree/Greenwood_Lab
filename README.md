@@ -90,15 +90,15 @@ After completing the loop, each sample should be associated with a series of “
 
 Wu, Ximing (2019), "Robust Likelihood Cross Validation for Kernel Density Estimation," Journal of Business and Economic Statistics, 37(4): 761-770.
 
-## radially symmetric kernel (Gussian kernel)
+##radially symmetric kernel (Gussian kernel)
 RadSym <- function(u)
  exp(-rowSums(u^2)/2) / (2*pi)^(ncol(u)/2)
-## multivariate extension of Scott's bandwidth rule
+##multivariate extension of Scott's bandwidth rule
 Scott <- function(data)
  t(chol(cov(data))) * nrow(data) ^ (-1/(ncol(data)+4))
-## compute KDE at x given data
+##compute KDE at x given data
 mvkde <- function(x, data, bandwidth=Scott, kernel=RadSym) {
-# bandwidth may be a function or matrix
+#bandwidth may be a function or matrix
  if(is.function(bandwidth))
    bandwidth <- bandwidth(data)
  u <- t(solve(bandwidth, t(data) - x))
